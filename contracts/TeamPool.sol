@@ -1,86 +1,117 @@
 //SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.7;
 
-//Chainlink Imports
-import "@chainlink/contracts/src/v0.8/ChainlinkClient.sol";
+error TeamPool__NotEnoughEthStaked();
+error TeamPool__GameClosed();
+error TeamPool__TransferOwnerFailed();
+error TeamPool__TransferFailed();
 
-//errors
-
-/** @title A sports pool contract
- *   @author Chris Broman
- *   @notice This contract is for creating an untamperable fair sports pool
- *   @dev    This implements chainlink subscription for sports results an scores.  */
-
-contract TeamPool is ChainlinkClient {
-    //Type declarations
+contract TeamPool {
+    //Type Definitions
 
     enum PoolState {
         OPEN,
-        PENDING_RESULTS
-    }
-
-    struct GameCreate {
-        bytes32 gameId;
-        uint256 startTime;
-        string homeTeam;
-        string awayTeam;
-    }
-
-    struct GameResolve {
-        bytes32 gameId;
-        uint8 homeScore;
-        uint8 awayScore;
-        uint8 statusId;
+        CLOSED
     }
 
     //State Variables
-    uint256 private immutable i_entranceFee;
-    address payable[] s_homePlayers;
-    address payable[] s_awayPlayers;
-    bytes32 s_gameId;
-    bytes256 s_startTime;
-    string s_homeTeam;
-    string s_awayTeam;
-    uint8 s_homeScore;
-    uint8 s_awayScore;
-    uint8 s_statusId;
+
+    address private immutable i_owner;
+    uint private immutable i_entranceFee = 45000000000000000;
+    address payable[] s_homeTeamPlayers;
+    address payable[] s_awayTeamPlayers;
+    uint private s_totalPool = 0;
+    uint private s_toDistribute;
 
     //Pool Variables
+
     PoolState private s_poolState;
 
     //Events
 
-    //Constructor
-    /**
-     * @param _link the LINK token address.
-     * @param _oracle the Operator.sol contract address.
-     */
-  //  constructor(address _link, address _oracle) {
-        setChainlinkToken(_link);
-        setChainlinkOracle(_oracle);
-    }
+    event HomeTeamPicked(address indexed player);
+    event AwayTeamPicked(address indexed player);
+    event WinningsDistributed();
 
     //Functions
-    //View / Pure Functions
 
-    function getEntranceFee() public view returns (uint256) {
+    constructor() {
+        i_owner = msg.sender;
+    }
+
+    function pickHomeTeam() public payable {
+        if (msg.value < i_entranceFee) {
+            revert TeamPool__NotEnoughEthStaked();
+        }
+        if (s_poolState != PoolState.OPEN) {
+            revert TeamPool__GameClosed();
+        }
+        s_homeTeamPlayers.push(payable(msg.sender));
+        s_totalPool += msg.value;
+        emit HomeTeamPicked(msg.sender);
+    }
+
+    function pickAwayTeam() public payable {
+        if (msg.value < i_entranceFee) {
+            revert TeamPool__NotEnoughEthStaked();
+        }
+        if (s_poolState != PoolState.OPEN) {
+            revert TeamPool__GameClosed();
+        }
+        s_awayTeamPlayers.push(payable(msg.sender));
+        s_totalPool += msg.value;
+        emit AwayTeamPicked(msg.sender);
+    }
+
+    function distributeWinnings() public payable {
+        bool success;
+        address payable[] memory winningTeam = s_awayTeamPlayers;
+        uint ownerFee = (s_totalPool * 5) / 100;
+        uint remainingBalance = s_totalPool - ownerFee;
+        (success, ) = i_owner.call{value: ownerFee}("");
+        if (!success) {
+            revert TeamPool__TransferOwnerFailed();
+        }
+        s_toDistribute = remainingBalance / winningTeam.length;
+        for (uint i = 0; i < winningTeam.length; i++) {
+            (success, ) = winningTeam[i].call{value: s_toDistribute}("");
+            if (!success) {
+                revert TeamPool__TransferFailed();
+            }
+        }
+        s_toDistribute = 0;
+        s_totalPool = 0;
+        emit WinningsDistributed();
+    }
+
+    //View / Pure functions
+
+    function getPoolState() public view returns (PoolState) {
+        return s_poolState;
+    }
+
+    function getHomeTeamPlayer(uint index) public view returns (address) {
+        return s_homeTeamPlayers[index];
+    }
+
+    function getAwayTeamPlayer(uint index) public view returns (address) {
+        return s_awayTeamPlayers[index];
+    }
+
+    function getEntranceFee() public pure returns (uint) {
         return i_entranceFee;
     }
 
-    function getHomePlayers(uint256 index) public view returns (address) {
-        return s_homePlayers[index];
+    function contractTotal() public view returns (uint) {
+        return address(this).balance;
     }
 
-    function getAwayPlayers(uint256 index) public view returns (address) {
-        return s_awayPlayers[index];
+    function getPoolTotal() public view returns (uint) {
+        return s_totalPool;
     }
 
-    function getNumberHomePlayers() public view returns (uint256) {
-        return s_homePlayers.length;
-    }
-
-    function getNumberAwayPlayers() public view returns (uint256) {
-        return s_awayPlayers.length;
+    function getToDistribute() public view returns (uint) {
+        return s_toDistribute;
     }
 }
